@@ -1,0 +1,4 @@
+name = "DirWalkers"
+uuid = "e22505fa-d5cb-4f7b-9088-d54cc7e0689e"
+authors = ["David MacMahon <davidm@astro.berkeley.edu>"]
+version = "0.1.0"
