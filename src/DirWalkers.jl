@@ -156,12 +156,18 @@ function start_dirwalker(filefunc, dw::AbstractDirWalker, topdirs, args...;
         @info "waiting for dir tasks to complete"
         foreach(wait, dagents)
 
+        # take! empty string out of dw.dirq
+        take!(dw.dirq)
+
         # Put empty string into dw.fileq
         put!(dw.fileq, "")
 
         # Wait for file tasks to complete
         @info "waiting for file tasks to complete"
         foreach(wait, fagents)
+
+        # take! empty string out of dw.fileq
+        take!(dw.fileq)
 
         # Put nothing into dw.outq
         put!(dw.outq, nothing)
