@@ -60,6 +60,14 @@ function Base.iterate(dw::AbstractDirWalker, _=nothing)
 end
 
 """
+Return a tuple of the number of available items in the `dirq`, `fileq`, `outq`
+channels of `dw`.
+"""
+function Base.n_avail(dw::AbstractDirWalker)
+    Base.n_avail(dw.dirq), Base.n_avail(dw.fileq), Base.n_avail(dw.outq)
+end
+
+"""
     _process_dirs(filepred, dw::AbstractDirWalker, id, agentq, workq)
 
 Takes directory names from `workq` until it gets an empty directory name, which

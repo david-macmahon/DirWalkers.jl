@@ -2,8 +2,9 @@ module DistributedDirWalkersExt
 
 using DirWalkers: AbstractDirWalker, _process_dirs, _process_files, WORK_QUEUE_SIZE
 import DirWalkers: DirWalker, start_dagents, start_fagents
+import Base.n_avail
 
-using Distributed: RemoteChannel, @spawnat
+using Distributed: RemoteChannel, @spawnat, call_on_owner, channel_from_id
 
 struct RemoteDirWalker{T} <: AbstractDirWalker{T}
     dirq::RemoteChannel{Channel{String}}
@@ -16,6 +17,13 @@ function DirWalker{T}(::Type{RemoteChannel}; dqsize=10_000, fqsize=10_000, oqsiz
     fileq = RemoteChannel(()->Channel{String}(fqsize))
     outq = RemoteChannel(()->Channel{Union{Nothing,T}}(oqsize))
     RemoteDirWalker(dirq, fileq, outq)
+end
+
+"""
+Return the number of items available in `remotechannel`.
+"""
+function Base.n_avail(remotechannel::RemoteChannel)
+    call_on_owner(Base.n_avail∘channel_from_id, remotechannel)
 end
 
 function start_dagents(filepred, dw::RemoteDirWalker, agentspec)
