@@ -60,37 +60,54 @@ function Base.iterate(dw::AbstractDirWalker, _=nothing)
 end
 
 """
-Takes directory names from `dirq` until it gets an empty directory name, which
-causes the function re-`put!` the empty string into `dirq` and then return
-(return value TBD).  Each non-empty directory name is iterated via `walkdir` to
-completion.  Directory names with symlink components (i.e. if `readlink(d)!=d`)
-are ignored.  At each `walkdir` iteration the files that are not symlinks are
-`put!` into `fileq` if `filepred(filepath)` returns `true`.
+    _process_dirs(filepred, dw::AbstractDirWalker, id, agentq, workq)
+
+Takes directory names from `workq` until it gets an empty directory name, which
+causes the function to return `(; t=elapsed_time, n=ndirs)`.  For each directory
+taken from `workq` the contents are `put!` into `dw.dirq` or `dw.fileq`, as
+appropriate, and then put!'s `id` in `agentq` and an empty string in `dw.dirq`.
+Directory entries that are symlinks are ignored.
 """
-function _process_dirs(filepred, dw::AbstractDirWalker)
+function _process_dirs(filepred, dw::AbstractDirWalker, id, agentq, workq)
 try
     start = time()
     ndirs = 0
     while true
-        dir = take!(dw.dirq)
+        dir = take!(workq)
         if isempty(dir)
-            # Recycle empty value for other tasks processing dirq (if any)
-            put!(dw.dirq, dir)
             return (; t=time()-start, n=ndirs)
         end
 
-        @debug "processing dir $dir"
-        for (filedir, _, files) in walkdir(dir; onerror=_->nothing)
-            ndirs += 1
-            for file in files
-                path = joinpath(filedir, file)
-                if !islink(path) && filepred(path)
-                    put!(dw.fileq, path)
+        @debug "dagent $id processing dir $dir"
+        try
+            # TODO add check for readability (once a v1.10 way is known!)
+            paths = readdir(dir; join=true, sort=false)
+
+            # For each iten in dir
+            for item in paths
+                islink(item) && continue # skip symlinks
+                if isdir(item)
+                    # Add subdir item to dw.dirq
+                    #put!(dw.dirq, (; id, item))
+                    put!(dw.dirq, item)
+                elseif isfile(item) && filepred(item)
+                    # Add filepred-matching file path to dw.filerq
+                    put!(dw.fileq, item)
                 end
             end
+        catch ex
+            # TODO Make this @warn or @error?
+            @debug "error processing directory $dir\n$ex"
+        finally
+            # TODO Does the ordering of these two put! statements matter?
+            # Put id back into agentq
+            put!(agentq, id)
+            # Indicate "agent done"
+            put!(dw.dirq, "")
         end
     end
 catch ex
+@show ex
     (; ex)
 end
 end
@@ -162,24 +179,52 @@ function start_dirwalker(filefunc, dw::AbstractDirWalker, topdirs, args...;
 
         # Populate dw.dirq.  It is important to do this after starting agents to
         # avoid blocking on a full channel before agents are started.
-        for d in topdirs
-            isdir(d) && put!(dw, d)
+        for item in topdirs
+            #isdir(item) && !isempty(item) && put!(dw, (; id=0, item))
+            isdir(item) && !isempty(item) && put!(dw, item)
         end
-        # Put emoty string into dw.dirq to signify end of input to dirtasks
-        put!(dw, "")
 
-        # Wait for dir tasks to complete
-        @info "waiting for dir tasks to complete"
-        foreach(wait, dagents)
+        # Process dirq (TODO: make this a function)
+        @info "processing dirq"
+        npending = 0
+        while true
+            item = take!(dw.dirq)
 
-        # take! empty string out of dw.dirq
-        take!(dw.dirq)
+            # If item is empty, work request complete
+            if isempty(item)
+                npending -= 1
+                if npending <= 0
+                    # No more pending work requests, so no more potential work
+                    # In other words, we're done!
+                    break
+                else
+                    # Keep processing dirq
+                    continue
+                end
+            else
+                # Got a work item, get an available dagent
+                id = take!(dagentq)
+                # Get dagent's workq from dagentmap
+                workq = dagentmap[id].workq
+                # put! work item into dagent's work queue
+                put!(workq, item)
+                npending += 1
+            end
+        end
+
+        # Put empty string into workqs to signify end of input and then wait for
+        # dagent to finish.
+        @info "waiting for dir agents to complete"
+        for (workq, fetchable) in values(dagentmap)
+            put!(workq, "")
+            wait(fetchable)
+        end
 
         # Put empty string into dw.fileq
         put!(dw.fileq, "")
 
-        # Wait for file tasks to complete
-        @info "waiting for file tasks to complete"
+        # Wait for file agents to complete
+        @info "waiting for file agents to complete"
         foreach(wait, fagents)
 
         # take! empty string out of dw.fileq
@@ -190,7 +235,8 @@ function start_dirwalker(filefunc, dw::AbstractDirWalker, topdirs, args...;
 
         @info "done"
 
-        dagents, fagents
+        # "Return" dagent fetchables and fagent fetchable
+        last.(values(dagentmap)), fagents
     end
 
     runtask
