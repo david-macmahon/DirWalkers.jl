@@ -2,6 +2,8 @@ module DirWalkers
 
 export DirWalker, start_dirwalker
 
+const WORK_QUEUE_SIZE = 5 # 1 should be enough, but for now 5 seems a litte safer
+
 #=
 struct DirWalkerOld{T,C<:Channel}
     dirq::C{String}
@@ -119,11 +121,23 @@ end
 end
 
 function start_dagents(filepred, dw::DirWalker, agentspec)
-    map(1:agentspec) do _
-        errormonitor(
-            Threads.@spawn _process_dirs(filepred, dw)
+    # Create queue for dagents
+    agentq = Channel{Int}(agentspec)
+
+    # Start dagent tasks and create agent_id=>(; workq, fetchable) map
+    agentidmap = map(1:agentspec) do agent_id
+        workq = Channel{String}(WORK_QUEUE_SIZE)
+        fetchable = errormonitor(
+            Threads.@spawn _process_dirs(filepred, dw, agent_id, agentq, workq)
         )
-    end
+        # Add agent_id to agentq
+        put!(agentq, agent_id)
+        # Pair mapping agent_id to NamedTuple of workq and fetchable (i.e. Task)
+        agent_id => (; workq, fetchable)
+    end |> Dict
+
+    # Reurn agentidmap and agentq
+    agentidmap, agentq
 end
 
 function start_fagents(filefunc, dw::DirWalker, agentspec, args...; kwargs...)
@@ -138,8 +152,10 @@ function start_dirwalker(filefunc, dw::AbstractDirWalker, topdirs, args...;
     filepred=_->true, dagentspec=1, fagentspec=1, kwargs...
 )
     runtask = Threads.@spawn begin
-        # Start dir agents
-        dagents = start_dagents(filepred, dw, dagentspec)
+        # Start dir agents.  start_dagents handles creation of agentq because
+        # its sizing depends on how dagentspec in interpretted (i.e. as a
+        # (local) dagent task count vs a list of (distributed) dagent workers).
+        dagentmap, dagentq = start_dagents(filepred, dw, dagentspec)
 
         # Start file agents
         fagents = start_fagents(filefunc, dw, fagentspec, args...; kwargs...)

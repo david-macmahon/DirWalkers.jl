@@ -1,6 +1,6 @@
 module DistributedDirWalkersExt
 
-using DirWalkers: AbstractDirWalker, _process_dirs, _process_files
+using DirWalkers: AbstractDirWalker, _process_dirs, _process_files, WORK_QUEUE_SIZE
 import DirWalkers: DirWalker, start_dagents, start_fagents
 
 using Distributed: RemoteChannel, @spawnat
@@ -19,9 +19,22 @@ function DirWalker{T}(::Type{RemoteChannel}; dqsize=10_000, fqsize=10_000, oqsiz
 end
 
 function start_dagents(filepred, dw::RemoteDirWalker, agentspec)
-    map(agentspec) do w
-        @spawnat w _process_dirs(filepred, dw)
-    end
+    # Create queue for dagents
+    agentq = RemoteChannel(()->Channel{Int}(length(agentspec)))
+
+    # Start dagent tasks and create agent_id=>(; workq, fetchable) map
+    agentidmap = map(agentspec) do agent_id
+        # Create workq on/in agent rather than "current" proc (does it matter?)
+        workq = RemoteChannel(()->Channel{String}(WORK_QUEUE_SIZE), agent_id)
+        fetchable = @spawnat agent_id _process_dirs(filepred, dw, agent_id, agentq, workq)
+        # Add agent_id to agentq
+        put!(agentq, agent_id)
+        # Pair mapping agent_id to NamedTuple of workq and fetchable (i.e. Future)
+        agent_id => (; workq, fetchable)
+    end |> Dict
+
+    # Reurn agentidmap and agentq
+    agentidmap, agentq
 end
 
 function start_fagents(filefunc, dw::RemoteDirWalker, agentspec, args...; kwargs...)
