@@ -86,6 +86,7 @@ try
             return (; t=time()-start, n=ndirs)
         end
 
+        ndirs += 1
         @debug "dagent $id processing dir $dir"
         try
             # TODO add check for readability (once a v1.10 way is known!)
