@@ -1,82 +1,31 @@
 module DirWalkers
 
-export DirWalker, start_dirwalker
+export start_dirwalker
+export DirQueue, FileQueue, OutQueue
+export RemoteDirQueue, RemoteFileQueue, RemoteOutQueue
 
 const WORK_QUEUE_SIZE = 5 # 1 should be enough, but for now 5 seems a litte safer
 
-#=
-struct DirWalkerOld{T,C<:Channel}
-    dirq::C{String}
-    fileq::C{String}
-    outq::C{Union{Nothing,T}}
-end
-=#
-abstract type AbstractDirWalker{T} end
+# Abstract queue channel types
+const AbstractDirQueue = AbstractChannel{String}
+const AbstractFileQueue = AbstractChannel{String}
+const AbstractOutQueue{T} = AbstractChannel{Union{Nothing,T}}
 
-struct DirWalker{T} <: AbstractDirWalker{T}
-    dirq::Channel{String}
-    fileq::Channel{String}
-    outq::Channel{Union{Nothing,T}}
-end
-
-#=
-function DirWalker{T,C}(d,f,o) where {T, C<:AbstractChannel}
-    DirWalker{T,C{String},C{Union{Nothing,T}}}(d,f,o)
-end
-=#
-
-function DirWalker{T}(::Type{Channel}; dqsize=10_000, fqsize=10_000, oqsize=10_000)::AbstractDirWalker where {T}
-    dirq = Channel{String}(dqsize)
-    fileq = Channel{String}(fqsize)
-    outq = Channel{Union{Nothing,T}}(oqsize)
-    DirWalker(dirq, fileq, outq)
-end
-
-function DirWalker{T}(; dqsize=10_000, fqsize=10_000, oqsize=10_000)::AbstractDirWalker where T
-    DirWalker{T}(Channel; dqsize, fqsize, oqsize)
-#=
-    dirq = Channel{String}(dqsize)
-    fileq = Channel{String}(fqsize)
-    outq = Channel{Union{Nothing,T}}(oqsize)
-    DirWalker{T,Channel{String},Channel{Union{Nothing,String}}}(dirq, fileq, outq)
-=#
-end
-
-DirWalker(; dqsize=10_000, fqsize=10_000, oqsize=10_000)::AbstractDirWalker = DirWalker{Any}(; dqsize, fqsize, oqsize)
-
-# TODO Maybe create getters for dirq,fileq,outq?
-Base.put!(dw::AbstractDirWalker, dir) = put!(dw.dirq, dir)
-Base.take!(dw::AbstractDirWalker) = take!(dw.outq)
-Base.isready(dw::AbstractDirWalker) = isready(dw.outq)
-
-# Iteration for AbstractDirWalker `take`s from `outq` until getting `nothing`.
-
-Base.IteratorSize(::Type{<:AbstractDirWalker}) = Base.SizeUnknown()
-Base.eltype(_::AbstractDirWalker{T}) where T = T
-
-function Base.iterate(dw::AbstractDirWalker, _=nothing)
-    e = take!(dw)
-    ifelse(e===nothing, nothing, (e, nothing))
-end
+# Concrete queue channel types
+const DirQueue = Channel{String}
+const FileQueue = Channel{String}
+const OutQueue{T} = Channel{Union{Nothing,T}}
 
 """
-Return a tuple of the number of available items in the `dirq`, `fileq`, `outq`
-channels of `dw`.
-"""
-function Base.n_avail(dw::AbstractDirWalker)
-    Base.n_avail(dw.dirq), Base.n_avail(dw.fileq), Base.n_avail(dw.outq)
-end
-
-"""
-    _process_dirs(filepred, dw::AbstractDirWalker, id, agentq, workq)
+    _process_dirs(filepred, dirq, fileq, agentq, workq, id)
 
 Takes directory names from `workq` until it gets an empty directory name, which
 causes the function to return `(; t=elapsed_time, n=ndirs)`.  For each directory
-taken from `workq` the contents are `put!` into `dw.dirq` or `dw.fileq`, as
-appropriate, and then put!'s `id` in `agentq` and an empty string in `dw.dirq`.
+taken from `workq` the contents are `put!` into `dirq` or `fileq`, as
+appropriate, and then put!'s `id` in `agentq` and an empty string in `dirq`.
 Directory entries that are symlinks are ignored.
 """
-function _process_dirs(filepred, dw::AbstractDirWalker, id, agentq, workq)
+function _process_dirs(filepred, dirq, fileq, agentq, workq, id)
 try
     start = time()
     ndirs = 0
@@ -96,12 +45,12 @@ try
             for item in paths
                 islink(item) && continue # skip symlinks
                 if isdir(item)
-                    # Add subdir item to dw.dirq
-                    #put!(dw.dirq, (; id, item))
-                    put!(dw.dirq, item)
+                    # Add subdir item to dirq
+                    #put!(dirq, (; id, item))
+                    put!(dirq, item)
                 elseif isfile(item) && filepred(item)
-                    # Add filepred-matching file path to dw.filerq
-                    put!(dw.fileq, item)
+                    # Add filepred-matching file path to fileq
+                    put!(fileq, item)
                 end
             end
         catch ex
@@ -112,7 +61,7 @@ try
             # Put id back into agentq
             put!(agentq, id)
             # Indicate "agent done"
-            put!(dw.dirq, "")
+            put!(dirq, "")
         end
     end
 catch ex
@@ -121,21 +70,21 @@ catch ex
 end
 end
 
-function _process_files(filefunc, dw::AbstractDirWalker, args...; kwargs...)
+function _process_files(filefunc, fileq, outq, args...; kwargs...)
 try
     start = time()
     nfiles = 0
     while true
-        file = take!(dw.fileq)
+        file = take!(fileq)
         if isempty(file)
             # Recycle empty value for other tasks processing fileq (if any)
-            put!(dw.fileq, file)
+            put!(fileq, file)
             return (; t=time()-start, n=nfiles)
         end
 
         try
             @debug "processing file $file"
-            put!(dw.outq, filefunc(file, args...; kwargs...))
+            put!(outq, filefunc(file, args...; kwargs...))
             nfiles += 1
         catch ex
             @warn "got exception processing $file" ex
@@ -146,7 +95,7 @@ catch ex
 end
 end
 
-function start_dagents(filepred, dw::DirWalker, agentspec)
+function start_dagents(filepred, dirq, fileq, agentspec)
     # Create queue for dagents
     agentq = Channel{Int}(agentspec)
 
@@ -154,7 +103,7 @@ function start_dagents(filepred, dw::DirWalker, agentspec)
     agentidmap = map(1:agentspec) do agent_id
         workq = Channel{String}(WORK_QUEUE_SIZE)
         fetchable = errormonitor(
-            Threads.@spawn _process_dirs(filepred, dw, agent_id, agentq, workq)
+            Threads.@spawn _process_dirs(filepred, dirq, fileq, agentq, workq, agent_id)
         )
         # Add agent_id to agentq
         put!(agentq, agent_id)
@@ -166,38 +115,42 @@ function start_dagents(filepred, dw::DirWalker, agentspec)
     agentidmap, agentq
 end
 
-function start_fagents(filefunc, dw::DirWalker, agentspec, args...; kwargs...)
+function start_fagents(filefunc, fileq, outq, agentspec, args...; kwargs...)
     map(1:agentspec) do _
         errormonitor(
-            Threads.@spawn _process_files(filefunc, dw, args...; kwargs...)
+            Threads.@spawn _process_files(filefunc, fileq, outq, args...; kwargs...)
         )
     end
 end
 
-function start_dirwalker(filefunc, dw::AbstractDirWalker, topdirs, args...;
-    filepred=_->true, dagentspec=1, fagentspec=1, kwargs...
+function start_dirwalker(filefunc, dirq, fileq, outq, topdirs, args...;
+    filepred=_->true, dagentspec=1, fagentspec=1, extraspec=0, kwargs...
 )
+    any(isempty, topdirs) && error("topdirs cannot contain empty names")
+
     runtask = Threads.@spawn begin
         # Start dir agents.  start_dagents handles creation of agentq because
         # its sizing depends on how dagentspec in interpretted (i.e. as a
         # (local) dagent task count vs a list of (distributed) dagent workers).
-        dagentmap, dagentq = start_dagents(filepred, dw, dagentspec)
+        dagentmap, dagentq = start_dagents(filepred, dirq, fileq, dagentspec)
 
         # Start file agents
-        fagents = start_fagents(filefunc, dw, fagentspec, args...; kwargs...)
+        fagents = start_fagents(filefunc, fileq, outq, fagentspec, args...; kwargs...)
 
-        # Populate dw.dirq.  It is important to do this after starting agents to
-        # avoid blocking on a full channel before agents are started.
+        # Populate dirq.  It is important to do this after starting agents to
+        # avoid blocking on a full channel before agents are started.  We can't
+        # do `isdir` checks here because the main process may be running on a
+        # system (e.g. a head node) that doesn't have access to the relevant
+        # filesystem (e.g. `/datag`).
         for item in topdirs
-            #isdir(item) && !isempty(item) && put!(dw, (; id=0, item))
-            isdir(item) && !isempty(item) && put!(dw, item)
+            put!(dirq, item)
         end
 
         # Process dirq (TODO: make this a function)
         @info "processing dirq"
         npending = 0
         while true
-            item = take!(dw.dirq)
+            item = take!(dirq)
 
             # If item is empty, work request complete
             if isempty(item)
@@ -222,33 +175,38 @@ function start_dirwalker(filefunc, dw::AbstractDirWalker, topdirs, args...;
         end
 
         # Put empty string into workqs to signify end of input and then wait for
-        # dagent to finish.
+        # dagents to finish by fetching results.
         @info "waiting for dir agents to complete"
-        for (workq, fetchable) in values(dagentmap)
+        for workq in first.(values(dagentmap))
             put!(workq, "")
-            wait(fetchable)
         end
+        dagent_results = fetch.(last.(values(dagentmap)))
 
-        # Put empty string into dw.fileq
-        put!(dw.fileq, "")
+        # Startup extra file agents
+        append!(fagents, start_fagents(filefunc, fileq, outq, extraspec, args...; kwargs...))
 
-        # Wait for file agents to complete
+        # Put empty string into fileq
+        put!(fileq, "")
+
+        # Wait for file agents to complete by fetching results
         @info "waiting for file agents to complete"
-        foreach(wait, fagents)
+        fagent_results = fetch.(fagents)
 
-        # take! empty string out of dw.fileq
-        take!(dw.fileq)
+        # take! empty string out of fileq
+        take!(fileq)
 
-        # Put nothing into dw.outq
-        put!(dw.outq, nothing)
+        # Put nothing into outq
+        put!(outq, nothing)
 
         @info "done"
 
-        # "Return" dagent fetchables and fagent fetchable
-        last.(values(dagentmap)), fagents
+        # "Return" dagent results and fagent results
+        dagent_results, fagent_results
     end
 
     runtask
 end
+
+include("DistributedDirWalkers.jl")
 
 end # module DirWalkers
