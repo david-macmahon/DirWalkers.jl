@@ -39,6 +39,6 @@ end
 
 function start_fagents(filefunc, fileq::RemoteFileQueue, outq::RemoteOutQueue, agentspec, args...; kwargs...)
     map(agentspec) do w
-        @spawnat w _process_files(filefunc, fileq, outq, args...; kwargs...)
+        @spawnat w _process_files(filefunc, fileq, outq, w, args...; kwargs...)
     end
 end

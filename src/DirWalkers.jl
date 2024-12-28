@@ -20,10 +20,10 @@ const OutQueue{T} = Channel{Union{Nothing,T}}
     _process_dirs(filepred, dirq, fileq, agentq, workq, id)
 
 Takes directory names from `workq` until it gets an empty directory name, which
-causes the function to return `(; t=elapsed_time, n=ndirs)`.  For each directory
-taken from `workq` the contents are `put!` into `dirq` or `fileq`, as
-appropriate, and then put!'s `id` in `agentq` and an empty string in `dirq`.
-Directory entries that are symlinks are ignored.
+causes the function to return `(; host=hostname, id, t=elapsed_time, n=ndirs)`.
+For each directory taken from `workq` the contents are `put!` into `dirq` or
+`fileq`, as appropriate, and then put!'s `id` in `agentq` and an empty string in
+`dirq`.  Directory entries that are symlinks are ignored.
 """
 function _process_dirs(filepred, dirq, fileq, agentq, workq, id)
 try
@@ -32,7 +32,7 @@ try
     while true
         dir = take!(workq)
         if isempty(dir)
-            return (; t=time()-start, n=ndirs)
+            return (; host=gethostname(), id, t=time()-start, n=ndirs)
         end
 
         ndirs += 1
@@ -70,7 +70,7 @@ catch ex
 end
 end
 
-function _process_files(filefunc, fileq, outq, args...; kwargs...)
+function _process_files(filefunc, fileq, outq, id, args...; kwargs...)
 try
     start = time()
     nfiles = 0
@@ -79,7 +79,7 @@ try
         if isempty(file)
             # Recycle empty value for other tasks processing fileq (if any)
             put!(fileq, file)
-            return (; t=time()-start, n=nfiles)
+            return (; host=gethostname(), id, t=time()-start, n=nfiles)
         end
 
         try
@@ -116,9 +116,9 @@ function start_dagents(filepred, dirq, fileq, agentspec)
 end
 
 function start_fagents(filefunc, fileq, outq, agentspec, args...; kwargs...)
-    map(1:agentspec) do _
+    map(1:agentspec) do agent_id
         errormonitor(
-            Threads.@spawn _process_files(filefunc, fileq, outq, args...; kwargs...)
+            Threads.@spawn _process_files(filefunc, fileq, outq, agent_id, args...; kwargs...)
         )
     end
 end
