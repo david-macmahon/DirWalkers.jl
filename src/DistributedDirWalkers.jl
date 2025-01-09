@@ -26,7 +26,7 @@ function start_dagents(filepred, dirq::RemoteDirQueue, fileq, agentspec)
         # OLD Create workq on/in agent rather than "current" proc (does it matter?)
         # NEW Create workq on/in "current" proc rather than agent (does it matter?)
         workq = RemoteChannel(()->Channel{String}(WORK_QUEUE_SIZE))
-        fetchable = @spawnat agent_id _process_dirs(filepred, dirq, fileq, agentq, workq, id)
+        fetchable = @spawnat agent_id _process_dirs(filepred, dirq, fileq, agentq, workq, agent_id)
         # Add agent_id to agentq
         put!(agentq, agent_id)
         # Pair mapping agent_id to NamedTuple of workq and fetchable (i.e. Future)
