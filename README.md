@@ -56,9 +56,9 @@ empty String from the file queue.
 
 # Running a directory walker
 
-A directory walker is started by calling the `start_dirwalker` function:
+A directory walk is performed by calling the `run_dirwalker` function:
 
-    start_dirwalker(filefunc, dirq, fileq, outq, topdirs, args...;
+    run_dirwalker(filefunc, dirq, fileq, outq, topdirs, args...;
         filepred=_->true, dagentspec=1, fagentspec=1, extraspec=0, kwargs...)
 
 ## Arguments
@@ -106,27 +106,44 @@ accomplished using `@everywhere` after the workers have been started.
 
 When using extra out-of-process worker processes via `extraspec`, these worker
 processes must be started alongside the other file agent worker processes before
-calling `start_dirwalker` even though they will not be active until the
-directory agents finish.
+calling `run_dirwalker` even though they will not be active until the directory
+agents finish.
+
+Often the directory and file agents have access to the same (possibly
+distributed) filesystem(s).  In this case any file agent can process a file from
+any directory agent.  In other cases, not all directory and file agents will
+have equal access to the same filesystem (e.g. local filesystem on remote worker
+hosts).  In these cases, `run_dirwalker` may be run in parallel on multiple
+remote workers (or less likely in Tasks).  When operating in this "silo" mode,
+be sure to use a separate `dirq`, `fileq`, and `topdirs` for each
+`run_dirwalker` call and that the directory and file agents all have access to
+the same filesystem(s).  When running in "silo" mode with a single common
+`outq`, be sure to keep taking items out of `outq` until you get one `nothing`
+value for each `run_diralker` call.
 
 ## Return value
 
-The `start_dirwalker` function returns a `Task` object.  Waiting on this `Task`
-will only return once the directory walker has finished.  Fetching the results
-of this `Task` will return two Vectors of named tuples, one for the directory
-agents and one the file agents.  Each named tuple has fields `n` and `t`, where
-`n` is the number of directories/files processed by the corresponding agent, and
-`t` is the number of seconds that the agent ran.
+The `run_dirwalker` function returns two Vectors of named tuples, one for the
+directory agents and one for the file agents.  Each named tuple has fields
+`host`, `id`, `n` and `t`, where `host` and `id` are the hostname and ID of the
+agent, `n` is the number of directories/files processed by the corresponding
+agent, and `t` is the elapsed time in seconds that the agent took to run.
 
 ## Processing output
 
-Processing can be deferred until the directory walker completes, but only if the
-entire output can be buffered in the output queue.  Alternatively, the user can
-take outputs from the output queue and processes them in parallel with the rest
-of the directory walker mechanism.  A value of `nothing` indicates the end of
-data.  Further `take!` calls on `outq` will block.
+If `outq` can store all the results internally, the processing of the output
+can be performed after `run_dirwalker` returns, but generally it is desirable
+to process the output from `outq` in parallel with the running `run_dirwalker`
+call.  In either case, you can get the output values by repeatedly calling
+`take!(outq)` until it returns `nothing`, which indicates the end of data (and
+further `take!` calls on `outq` will block).
 
-# Example
+To process the output in parallel with `run_dirwalker`, either `run_dirwalker`
+or the output processing code (or both) must be run in a separate `Task` or
+remote worker.  One common approach is to run `run_dirwalker` in a separate
+`Task` with `Threads.@spawn`.  See the "parallel processing" example below.
+
+# Example (non-parallel processing)
 
     using DirWalkers
 
@@ -135,8 +152,8 @@ data.  Further `take!` calls on `outq` will block.
     fileq = FileQueue(Inf)
     outq = OutQueue{Base.Filesystem.StatStruct}(Inf)
 
-    # Start directory walker
-    runtask = start_dirwalker(stat, dirq, fileq, outq, [@__DIR__])
+    # Run the directory walker
+    dstats, fstats = run_dirwalker(stat, dirq, fileq, outq, [@__DIR__])
 
     # Process outputs
     for ss in outq
@@ -144,5 +161,23 @@ data.  Further `take!` calls on `outq` will block.
         println(ss)
     end
 
-    # Fetch agent stats
+# Example (parallel processing)
+
+    using DirWalkers
+
+    # Create queues
+    dirq = DirQueue(Inf)
+    fileq = FileQueue(Inf)
+    outq = OutQueue{Base.Filesystem.StatStruct}(Inf)
+
+    # Start the directory walker running in a separate Task
+    runtask = Threads.@spawn run_dirwalker(stat, dirq, fileq, outq, [@__DIR__])
+
+    # Process outputs
+    for ss in outq
+        ss === nothing && break
+        println(ss)
+    end
+
+    # Get run_dirwalker return values by fetching from runtask
     dstats, fstats = fetch(runtask)
