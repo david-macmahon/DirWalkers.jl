@@ -29,8 +29,11 @@ function _process_dirs(filepred, dirq, fileq, agentq, workq, id)
 try
     start = time()
     ndirs = 0
+    @debug "dagent $id starting at $start"
     while true
+        @debug "dagent $id taking dir from workq"
         dir = take!(workq)
+        @debug "dagent $id got dir" dir
         if isempty(dir)
             return (; host=gethostname(), id, t=time()-start, n=ndirs)
         end
@@ -40,29 +43,38 @@ try
         try
             # TODO add check for readability (once a v1.10 way is known!)
             paths = readdir(dir; join=true, sort=false)
+            @debug "dagent $id found $(length(paths)) in $dir"
 
             # For each iten in dir
             for item in paths
+                @debug "dagent $id processing $item"
                 islink(item) && continue # skip symlinks
                 if isdir(item)
                     # Add subdir item to dirq
                     #put!(dirq, (; id, item))
+                    @debug "dagent $id adding directory $item to dirq"
                     put!(dirq, item)
                 elseif isfile(item) && filepred(item)
                     # Add filepred-matching file path to fileq
+                    @debug "dagent $id adding matching file $item to fileq"
                     put!(fileq, item)
+                else
+                    @debug "dagent $id ignoring non-matching file $item"
                 end
             end
         catch ex
             # TODO Make this @warn or @error?
-            @debug "error processing directory $dir\n$ex"
+            @debug "dagent $id error processing directory $dir\n$ex"
         finally
             # TODO Does the ordering of these two put! statements matter?
             # Put id back into agentq
+            @debug "dagent $id putting id back in agentq"
             put!(agentq, id)
+            @debug """dagent $id putting "agent done" in dirq"""
             # Indicate "agent done"
             put!(dirq, "")
         end
+        @debug "dagent $id end of dagent iteration"
     end
 catch ex
 @show ex
