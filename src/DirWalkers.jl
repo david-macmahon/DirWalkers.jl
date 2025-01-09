@@ -1,6 +1,6 @@
 module DirWalkers
 
-export start_dirwalker
+export run_dirwalker
 export DirQueue, FileQueue, OutQueue
 export RemoteDirQueue, RemoteFileQueue, RemoteOutQueue
 
@@ -135,88 +135,90 @@ function start_fagents(filefunc, fileq, outq, agentspec, args...; kwargs...)
     end
 end
 
-function start_dirwalker(filefunc, dirq, fileq, outq, topdirs, args...;
+function run_dirwalker(filefunc, dirq, fileq, outq, topdirs, args...;
     filepred=_->true, dagentspec=1, fagentspec=1, extraspec=0, kwargs...
 )
     any(isempty, topdirs) && error("topdirs cannot contain empty names")
 
-    runtask = Threads.@spawn begin
-        # Start dir agents.  start_dagents handles creation of agentq because
-        # its sizing depends on how dagentspec in interpretted (i.e. as a
-        # (local) dagent task count vs a list of (distributed) dagent workers).
-        dagentmap, dagentq = start_dagents(filepred, dirq, fileq, dagentspec)
+    # Start dir agents.  start_dagents handles creation of agentq because
+    # its sizing depends on how dagentspec in interpretted (i.e. as a
+    # (local) dagent task count vs a list of (distributed) dagent workers).
+    dagentmap, dagentq = start_dagents(filepred, dirq, fileq, dagentspec)
 
-        # Start file agents
-        fagents = start_fagents(filefunc, fileq, outq, fagentspec, args...; kwargs...)
+    # Start file agents
+    fagents = start_fagents(filefunc, fileq, outq, fagentspec, args...; kwargs...)
 
-        # Populate dirq.  It is important to do this after starting agents to
-        # avoid blocking on a full channel before agents are started.  We can't
-        # do `isdir` checks here because the main process may be running on a
-        # system (e.g. a head node) that doesn't have access to the relevant
-        # filesystem (e.g. `/datag`).
-        for item in topdirs
-            put!(dirq, item)
-        end
-
-        # Process dirq (TODO: make this a function)
-        @info "processing dirq"
-        npending = 0
-        while true
-            item = take!(dirq)
-
-            # If item is empty, work request complete
-            if isempty(item)
-                npending -= 1
-                if npending <= 0
-                    # No more pending work requests, so no more potential work
-                    # In other words, we're done!
-                    break
-                else
-                    # Keep processing dirq
-                    continue
-                end
-            else
-                # Got a work item, get an available dagent
-                id = take!(dagentq)
-                # Get dagent's workq from dagentmap
-                workq = dagentmap[id].workq
-                # put! work item into dagent's work queue
-                put!(workq, item)
-                npending += 1
-            end
-        end
-
-        # Put empty string into workqs to signify end of input and then wait for
-        # dagents to finish by fetching results.
-        @info "waiting for dir agents to complete"
-        for workq in first.(values(dagentmap))
-            put!(workq, "")
-        end
-        dagent_results = fetch.(last.(values(dagentmap)))
-
-        # Startup extra file agents
-        append!(fagents, start_fagents(filefunc, fileq, outq, extraspec, args...; kwargs...))
-
-        # Put empty string into fileq
-        put!(fileq, "")
-
-        # Wait for file agents to complete by fetching results
-        @info "waiting for file agents to complete"
-        fagent_results = fetch.(fagents)
-
-        # take! empty string out of fileq
-        take!(fileq)
-
-        # Put nothing into outq
-        put!(outq, nothing)
-
-        @info "done"
-
-        # "Return" dagent results and fagent results
-        dagent_results, fagent_results
+    # Populate dirq.  It is important to do this after starting agents to
+    # avoid blocking on a full channel before agents are started.  We can't
+    # do `isdir` checks here because the main process may be running on a
+    # system (e.g. a head node) that doesn't have access to the relevant
+    # filesystem (e.g. `/datag`).
+    for item in topdirs
+        put!(dirq, item)
     end
 
-    runtask
+    # Process dirq (TODO: make this a function)
+    @debug "processing dirq"
+    npending = 0
+    while true
+        @debug "getting item"
+        item = take!(dirq)
+        @debug "got item" item
+
+        # If item is empty, work request complete
+        if isempty(item)
+            npending -= 1
+            if npending <= 0
+                # No more pending work requests, so no more potential work
+                # In other words, we're done!
+                break
+            else
+                # Keep processing dirq
+                continue
+            end
+        else
+            # Got a work item, get an available dagent
+            @debug "getting dagent from dagentq"
+            id = take!(dagentq)
+            @debug "got dagent $id"
+            # Get dagent's workq from dagentmap
+            workq = dagentmap[id].workq
+            # put! work item into dagent's work queue
+            @debug "putting item into workq" workq
+            put!(workq, item)
+            npending += 1
+            @debug "put item into workq" npending
+        end
+    end
+
+    # Put empty string into workqs to signify end of input and then wait for
+    # dagents to finish by fetching results.
+    @info "waiting for dir agents to complete"
+    for workq in first.(values(dagentmap))
+        put!(workq, "")
+    end
+    dagent_results = fetch.(last.(values(dagentmap)))
+
+    # Startup extra file agents
+    append!(fagents, start_fagents(filefunc, fileq, outq, extraspec, args...; kwargs...))
+
+    # Put empty string into fileq
+    put!(fileq, "")
+
+    # Wait for file agents to complete by fetching results
+    @info "waiting for file agents to complete"
+    fagent_results = fetch.(fagents)
+
+    # take! empty string out of fileq
+    take!(fileq)
+
+    # Put nothing into outq
+    put!(outq, nothing)
+
+    @info "done"
+
+    # "Return" dagent results and fagent results
+    dagent_results, fagent_results
 end
 
 include("DistributedDirWalkers.jl")
