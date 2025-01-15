@@ -96,7 +96,9 @@ try
 
         try
             @debug "processing file $file"
-            put!(outq, filefunc(file, args...; kwargs...))
+            for item in filefunc(file, args...; kwargs...)
+                put!(outq, item)
+            end
             nfiles += 1
         catch ex
             @warn "got exception processing $file" ex

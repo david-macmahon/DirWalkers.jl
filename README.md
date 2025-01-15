@@ -48,11 +48,19 @@ until they take an empty String from the directory queue.
 
 File agents also run a loop.  For each iteration they take a filename from the
 file queue.  The file name is passed to a user-supplied *file function* that is
-expected to do something with the file and return some data.  One simple example
-of a suitable file function is `Base.stat`.  This returned data is then put into
-the output queue.  It is important that the output queue be created to hold the
-type of data returned by the file function.  File agents run until they take an
-empty String from the file queue.
+expected to do something with the file and return an iterator that yields
+data from (or about) the file.  Even if a single object is derived from the
+file, it must be returned as an iterator (e.g. wrapped in a `tuple`).  For
+example, `stat`, which returns a `StatStruct`, is not directly suitable as a
+DirWalker file function, but the anonymous function `f->tuple(stat(f))` or the
+composed function `tuple∘stat` would be.  The values yielded by the returned
+iterator are put into the output queue.  The output queue must be created to
+hold a type that is compatible with the type of data yielded by the iterator
+returned by the file function.  The motivation for returning an iterator from
+the file function is to allow file functions the option of partitioning large
+per-file data objects (e.g. large Vectors) into smaller pieces to limit memory
+consumption in the output queue.  File agents run until they take an empty
+String from the file queue.
 
 # Running a directory walker
 
@@ -92,7 +100,7 @@ integers) and `dirq` must be a `RemoteDirQueue`.  For `fagentspec`, the same
 constraints apply for `fileq` and `outq`.
 
 `extraspec` is an optional specification for additional file agents that will be
-started after the directory agents start.  Ir must be in the same format as
+started after the directory agents start.  It must be in the same format as
 `fagentspec`.  This is useful when one host will be running the directory agents
 in-process and other hosts will be running the file agents remotely.  To utilize
 the host resources that the directory agents had been using, additional
@@ -153,7 +161,7 @@ remote worker.  One common approach is to run `run_dirwalker` in a separate
     outq = OutQueue{Base.Filesystem.StatStruct}(Inf)
 
     # Run the directory walker
-    dstats, fstats = run_dirwalker(stat, dirq, fileq, outq, [@__DIR__])
+    dstats, fstats = run_dirwalker(tuple∘stat, dirq, fileq, outq, [@__DIR__])
 
     # Process outputs
     for ss in outq
@@ -171,7 +179,7 @@ remote worker.  One common approach is to run `run_dirwalker` in a separate
     outq = OutQueue{Base.Filesystem.StatStruct}(Inf)
 
     # Start the directory walker running in a separate Task
-    runtask = Threads.@spawn run_dirwalker(stat, dirq, fileq, outq, [@__DIR__])
+    runtask = Threads.@spawn run_dirwalker(tuple∘stat, dirq, fileq, outq, [@__DIR__])
 
     # Process outputs
     for ss in outq
