@@ -21,24 +21,33 @@ function start_dagents(filepred, dirq::RemoteDirQueue, fileq, agentspec)
     # Create queue for dagents
     agentq = RemoteChannel(()->Channel{Int}(length(agentspec)))
 
-    # Start dagent tasks and create agent_id=>(; workq, fetchable) map
-    agentidmap = map(agentspec) do agent_id
+    # Use tasks to spawn remote agents in parallel
+    agentid_workq_spawntasks = map(agentspec) do agent_id
         # OLD Create workq on/in agent rather than "current" proc (does it matter?)
         # NEW Create workq on/in "current" proc rather than agent (does it matter?)
         workq = RemoteChannel(()->Channel{String}(WORK_QUEUE_SIZE))
-        fetchable = @spawnat agent_id _process_dirs(filepred, dirq, fileq, agentq, workq, agent_id)
-        # Add agent_id to agentq
+        spawntask = Threads.@spawn @spawnat(agent_id, _process_dirs(filepred, dirq, fileq, agentq, workq, agent_id))
+        (agent_id, workq, spawntask)
+    end
+
+    # Map agentid_workq_spawntasks to Dict(agent_id=>(; workq, fetchable))
+    agentidmap = map(agentid_workq_spawntasks) do (agent_id, workq, spawntask)
+        agent_id => (; workq, fetchable=fetch(spawntask))
+    end|>Dict
+
+    # Put agent_ids from agentspec into agentq
+    for agent_id in agentspec
         put!(agentq, agent_id)
-        # Pair mapping agent_id to NamedTuple of workq and fetchable (i.e. Future)
-        agent_id => (; workq, fetchable)
-    end |> Dict
+    end
 
     # Reurn agentidmap and agentq
     agentidmap, agentq
 end
 
 function start_fagents(filefunc, fileq::RemoteFileQueue, outq::RemoteOutQueue, agentspec, args...; kwargs...)
-    map(agentspec) do w
-        @spawnat w _process_files(filefunc, fileq, outq, w, args...; kwargs...)
+    # Use tasks to spawn remote agents in parallel
+    spawntasks = map(agentspec) do w
+        Threads.@spawn @spawnat(w, _process_files(filefunc, fileq, outq, w, args...; kwargs...))
     end
+    fetch.(spawntasks)
 end
