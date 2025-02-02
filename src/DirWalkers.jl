@@ -1,5 +1,7 @@
 module DirWalkers
 
+using Base.Iterators: takewhile
+
 export run_dirwalker
 export DirQueue, FileQueue, OutQueue
 export RemoteDirQueue, RemoteFileQueue, RemoteOutQueue
@@ -30,14 +32,7 @@ try
     start = time()
     ndirs = 0
     @debug "dagent $id starting at $start"
-    while true
-        @debug "dagent $id taking dir from workq"
-        dir = take!(workq)
-        @debug "dagent $id got dir" dir
-        if isempty(dir)
-            return (; host=gethostname(), id, t=time()-start, n=ndirs)
-        end
-
+    for dir in takewhile(!isempty, workq)
         ndirs += 1
         @debug "dagent $id processing dir $dir"
         try
@@ -76,6 +71,8 @@ try
         end
         @debug "dagent $id end of dagent iteration"
     end
+
+    return (; host=gethostname(), id, t=time()-start, n=ndirs)
 catch ex
 @show ex
     (; ex)
@@ -86,14 +83,9 @@ function _process_files(filefunc, fileq, outq, id, args...; kwargs...)
 try
     start = time()
     nfiles = 0
-    while true
-        file = take!(fileq)
-        if isempty(file)
-            # Recycle empty value for other tasks processing fileq (if any)
-            put!(fileq, file)
-            return (; host=gethostname(), id, t=time()-start, n=nfiles)
-        end
 
+    # Take from fileq until we get an empty string
+    for file in takewhile(!isempty, fileq)
         try
             @debug "processing file $file"
             for item in filefunc(file, args...; kwargs...)
@@ -104,6 +96,11 @@ try
             @warn "got exception processing $file" ex
         end
     end
+
+    # Recycle empty value for other tasks processing fileq (if any)
+    put!(fileq, "")
+
+    return (; host=gethostname(), id, t=time()-start, n=nfiles)
 catch ex
     (; ex)
 end

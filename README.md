@@ -163,9 +163,8 @@ remote worker.  One common approach is to run `run_dirwalker` in a separate
     # Run the directory walker
     dstats, fstats = run_dirwalker(tuple∘stat, dirq, fileq, outq, [@__DIR__])
 
-    # Process outputs
-    for ss in outq
-        ss === nothing && break
+    # Process output queue until we get `nothing`
+    for ss in Iterators.takewhile(!isnothing, outq)
         println(ss)
     end
 
@@ -181,9 +180,8 @@ remote worker.  One common approach is to run `run_dirwalker` in a separate
     # Start the directory walker running in a separate Task
     runtask = Threads.@spawn run_dirwalker(tuple∘stat, dirq, fileq, outq, [@__DIR__])
 
-    # Process outputs
-    for ss in outq
-        ss === nothing && break
+    # Process output queue until we get `nothing`
+    for ss in Iterators.takewhile(!isnothing, outq)
         println(ss)
     end
 
