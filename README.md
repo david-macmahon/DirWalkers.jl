@@ -73,7 +73,7 @@ A directory walk is performed by calling the `run_dirwalker` function:
 
 - `filefunc` - The user-supplied function that will produce an output
   value for each file.  Its first argument must take the filename.  Any
-  additional `args` and `kwargs` passed to `start_dirwalker` will be passed to
+  additional `args` and `kwargs` passed to `run_dirwalker` will be passed to
   `filefunc` as well.
 - `dirq` - The user-supplied directory queue
 - `fileq` - The user-supplied file queue
