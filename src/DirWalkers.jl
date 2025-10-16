@@ -106,7 +106,7 @@ catch ex
 end
 end
 
-function start_dagents(filepred, dirq, fileq, agentspec)
+function start_dagents(filepred, dirq, fileq, agentspec; process_dirs=_process_dirs)
     # Create queue for dagents
     agentq = Channel{Int}(agentspec)
 
@@ -114,7 +114,7 @@ function start_dagents(filepred, dirq, fileq, agentspec)
     agentidmap = map(1:agentspec) do agent_id
         workq = Channel{String}(WORK_QUEUE_SIZE)
         fetchable = errormonitor(
-            Threads.@spawn _process_dirs(filepred, dirq, fileq, agentq, workq, agent_id)
+            Threads.@spawn process_dirs(filepred, dirq, fileq, agentq, workq, agent_id)
         )
         # Add agent_id to agentq
         put!(agentq, agent_id)
@@ -126,26 +126,27 @@ function start_dagents(filepred, dirq, fileq, agentspec)
     agentidmap, agentq
 end
 
-function start_fagents(filefunc, fileq, outq, agentspec, args...; kwargs...)
+function start_fagents(filefunc, fileq, outq, agentspec, args...; process_files=_process_files, kwargs...)
     map(1:agentspec) do agent_id
         errormonitor(
-            Threads.@spawn _process_files(filefunc, fileq, outq, agent_id, args...; kwargs...)
+            Threads.@spawn process_files(filefunc, fileq, outq, agent_id, args...; kwargs...)
         )
     end
 end
 
 function run_dirwalker(filefunc, dirq, fileq, outq, topdirs, args...;
-    filepred=_->true, dagentspec=1, fagentspec=1, extraspec=0, kwargs...
+    filepred=_->true, dagentspec=1, fagentspec=1, extraspec=0,
+    process_dirs=_process_dirs, process_files=_process_files, kwargs...
 )
     any(isempty, topdirs) && error("topdirs cannot contain empty names")
 
     # Start dir agents.  start_dagents handles creation of agentq because
     # its sizing depends on how dagentspec in interpretted (i.e. as a
     # (local) dagent task count vs a list of (distributed) dagent workers).
-    dagentmap, dagentq = start_dagents(filepred, dirq, fileq, dagentspec)
+    dagentmap, dagentq = start_dagents(filepred, dirq, fileq, dagentspec; process_dirs)
 
     # Start file agents
-    fagents = start_fagents(filefunc, fileq, outq, fagentspec, args...; kwargs...)
+    fagents = start_fagents(filefunc, fileq, outq, fagentspec, args...; process_files, kwargs...)
 
     # Populate dirq.  It is important to do this after starting agents to
     # avoid blocking on a full channel before agents are started.  We can't
@@ -199,7 +200,7 @@ function run_dirwalker(filefunc, dirq, fileq, outq, topdirs, args...;
     dagent_results = fetch.(last.(values(dagentmap)))
 
     # Startup extra file agents
-    append!(fagents, start_fagents(filefunc, fileq, outq, extraspec, args...; kwargs...))
+    append!(fagents, start_fagents(filefunc, fileq, outq, extraspec, args...; process_files, kwargs...))
 
     # Put empty string into fileq
     put!(fileq, "")

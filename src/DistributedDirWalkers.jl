@@ -17,7 +17,7 @@ function Base.n_avail(remotechannel::RemoteChannel)
     call_on_owner(Base.n_avail∘channel_from_id, remotechannel)
 end
 
-function start_dagents(filepred, dirq::RemoteDirQueue, fileq, agentspec)
+function start_dagents(filepred, dirq::RemoteDirQueue, fileq, agentspec; process_dirs=_process_dirs)
     # Create queue for dagents
     agentq = RemoteChannel(()->Channel{Int}(length(agentspec)))
 
@@ -26,7 +26,7 @@ function start_dagents(filepred, dirq::RemoteDirQueue, fileq, agentspec)
         # OLD Create workq on/in agent rather than "current" proc (does it matter?)
         # NEW Create workq on/in "current" proc rather than agent (does it matter?)
         workq = RemoteChannel(()->Channel{String}(WORK_QUEUE_SIZE))
-        spawntask = Threads.@spawn @spawnat(agent_id, _process_dirs(filepred, dirq, fileq, agentq, workq, agent_id))
+        spawntask = Threads.@spawn @spawnat(agent_id, process_dirs(filepred, dirq, fileq, agentq, workq, agent_id))
         (agent_id, workq, spawntask)
     end
 
@@ -44,10 +44,11 @@ function start_dagents(filepred, dirq::RemoteDirQueue, fileq, agentspec)
     agentidmap, agentq
 end
 
-function start_fagents(filefunc, fileq::RemoteFileQueue, outq::RemoteOutQueue, agentspec, args...; kwargs...)
+function start_fagents(filefunc, fileq::RemoteFileQueue, outq::RemoteOutQueue, agentspec, args...;
+                       process_files=_process_files, kwargs...)
     # Use tasks to spawn remote agents in parallel
     spawntasks = map(agentspec) do w
-        Threads.@spawn @spawnat(w, _process_files(filefunc, fileq, outq, w, args...; kwargs...))
+        Threads.@spawn @spawnat(w, process_files(filefunc, fileq, outq, w, args...; kwargs...))
     end
     fetch.(spawntasks)
 end
