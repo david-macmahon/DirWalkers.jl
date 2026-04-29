@@ -75,7 +75,7 @@ String from the file queue.
 A directory walk is performed by calling the `run_dirwalker` function:
 
     run_dirwalker(filefunc, dirq, fileq, outq, topdirs, args...;
-        filepred=_->true, dagentspec=1, fagentspec=1, extraspec=0, kwargs...)
+        filepred=_->true, dagentspec=1, fagentspec=1, extraspec=nothing, kwargs...)
 
 ## Arguments
 

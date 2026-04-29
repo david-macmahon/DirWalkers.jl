@@ -132,7 +132,7 @@ function start_fagents(filefunc, fileq, outq, agentspec, args...; process_files=
 end
 
 function run_dirwalker(filefunc, dirq, fileq, outq, topdirs, args...;
-    filepred=_->true, dagentspec=1, fagentspec=1, extraspec=0,
+    filepred=_->true, dagentspec=1, fagentspec=1, extraspec=nothing,
     process_dirs=_process_dirs, process_files=_process_files, kwargs...
 )
     any(isempty, topdirs) && error("topdirs cannot contain empty names")
@@ -193,8 +193,12 @@ function run_dirwalker(filefunc, dirq, fileq, outq, topdirs, args...;
     @info "waiting for dir agents to complete"
     dagent_results = fetch.(last.(values(dagentmap)))
 
-    # Startup extra file agents
-    append!(fagents, start_fagents(filefunc, fileq, outq, extraspec, args...; process_files, kwargs...))
+    # Startup extra file agents, if any
+    if extraspec !== nothing
+        append!(fagents, start_fagents(
+            filefunc, fileq, outq, extraspec, args...; process_files, kwargs...
+        ))
+    end
 
     # Put an empty string into fileq for each fagent
     for _ in fagents
