@@ -97,9 +97,6 @@ try
         end
     end
 
-    # Recycle empty value for other tasks processing fileq (if any)
-    put!(fileq, "")
-
     return (; host=gethostname(), id, t=time()-start, n=nfiles)
 catch ex
     (; ex)
@@ -205,20 +202,23 @@ function run_dirwalker(filefunc, dirq, fileq, outq, topdirs, args...;
     # Startup extra file agents
     append!(fagents, start_fagents(filefunc, fileq, outq, extraspec, args...; process_files, kwargs...))
 
-    # Put empty string into fileq
-    put!(fileq, "")
+    # Put an empty string into fileq for each fagent
+    for _ in fagents
+        put!(fileq, "")
+    end
 
     # Wait for file agents to complete by fetching results
     @info "waiting for file agents to complete"
     fagent_results = fetch.(fagents)
 
-    # take! empty string out of fileq
-    take!(fileq)
-
-    # Put nothing into outq
+    # Put nothing into outq.  We don't know how many output handlers are
+    # processing `outq` (that's up to the user), so we just put one `nothing`
+    # into `outq` and then return.  If the user runs multiple handlers for
+    # `outq`, they should recycle the `nothing` back into `outq` before
+    # returning.
     put!(outq, nothing)
 
-    @info "done"
+    @info "run_dirwalker done"
 
     # "Return" dagent results and fagent results
     dagent_results, fagent_results
