@@ -148,12 +148,15 @@ function run_dirwalker(filefunc, dirq, fileq, outq, topdirs, args...;
     # Start file agents
     fagents = start_fagents(filefunc, fileq, outq, fagentspec, args...; process_files, kwargs...)
 
-    # Populate dirq.  It is important to do this after starting agents to
-    # avoid blocking on a full channel before agents are started.  We can't
-    # do `isdir` checks here because the main process may be running on a
-    # system (e.g. a head node) that doesn't have access to the relevant
-    # filesystem (e.g. `/datag`).
+    # Populate dirq.  Currently, processing of dirq happens synchronously after
+    # dirq is populated.  This can lead to a deadlock if dirq is not deep enough
+    # to hold all topdirs.
+    #
+    # TODO Process dirq in an async Task that is started before populating dirq.
     for item in topdirs
+        # We can't do `isdir` checks on `topdirs` entries here because the
+        # current process may be running on a system (e.g. a head node) that
+        # doesn't have access to the relevant filesystem (e.g. `/datag`).
         put!(dirq, item)
     end
 
