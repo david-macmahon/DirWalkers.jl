@@ -10,18 +10,26 @@ external worker processes setup via `Distributed.jl`.  Queues can be in-process
 
 # Theory of operation
 
-`DirWalkers` requires three user-supplied queues and two types of agents.  Taken
-together, these queues and agents are known as a directory walker.
+`DirWalkers` requires three user-supplied queues, two internal queues, and two
+types of agents.  Taken together, these queues and agents are known as a
+directory walker.  A block diagram of the data flow can be seen here:
+
+![DirWalker block diagram](docs/src/images/dirwalker.drawio.svg)
 
 ## Queues
 
-1. A directory queue
-2. A file queue
-3. An output queue
+1. A directory queue (DQ)
+2. A file queue (FQ)
+3. An output queue (OQ)
 
 The directory and file queues are `Channel`s or `RemoteChannel`s that contain
 Strings.  The output queue can hold a user-supplied type or Nothing (to signal
 the end of data).
+
+Two other types of queues are used internally:
+
+4. An agent queue (AQ)
+5. Work queues (WQ), one per directory agent
 
 ## Agents
 
