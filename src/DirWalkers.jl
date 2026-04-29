@@ -160,23 +160,10 @@ function run_dirwalker(filefunc, dirq, fileq, outq, topdirs, args...;
     # Process dirq (TODO: make this a function)
     @debug "processing dirq"
     npending = 0
-    while true
-        @debug "getting item"
-        item = take!(dirq)
-        @debug "got item" item
-
-        # If item is empty, work request complete
-        if isempty(item)
-            npending -= 1
-            if npending <= 0
-                # No more pending work requests, so no more potential work
-                # In other words, we're done!
-                break
-            else
-                # Keep processing dirq
-                continue
-            end
-        else
+    keep_running = true
+    while keep_running
+        for item in Iterators.takewhile(!isempty, dirq)
+            @debug "got item" item
             # Got a work item, get an available dagent
             @debug "getting dagent from dagentq"
             id = take!(dagentq)
@@ -189,14 +176,21 @@ function run_dirwalker(filefunc, dirq, fileq, outq, topdirs, args...;
             npending += 1
             @debug "put item into workq" npending
         end
+
+        # A work request completed, decrement npending
+        npending -= 1
+        # Keep running if any work requests are still pending
+        keep_running = (npending > 0)
+        @debug "got empty string from dirq" npending keep_running
     end
 
     # Put empty string into workqs to signify end of input and then wait for
     # dagents to finish by fetching results.
-    @info "waiting for dir agents to complete"
+    @debug "signaling completion to dir agents"
     for workq in first.(values(dagentmap))
         put!(workq, "")
     end
+    @info "waiting for dir agents to complete"
     dagent_results = fetch.(last.(values(dagentmap)))
 
     # Startup extra file agents
