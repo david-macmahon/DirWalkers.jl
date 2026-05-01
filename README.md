@@ -6,55 +6,79 @@ primarily intended for collecting file inventories.  The work is performed by
 can be in-process `Task`s (which will run on multiple threads, if available) or
 external worker processes setup via `Distributed.jl`.  Queues can be in-process
 `Channel`s (for use with in-process `Task`-based agents) or `RemoteChannel`s
-(for use with external worker process agents).
+(for use with agents running in external worker processes).
 
-# Theory of operation
+# DirWalker architecture
 
-`DirWalkers` requires three user-supplied queues, two internal queues, and two
-types of agents.  Taken together, these queues and agents are known as a
-directory walker.  A block diagram of the data flow can be seen here:
+`DirWalkers` uses three types of agents and four queues.  A block diagram of the
+`DirWalkers` architecture is shown here and described below.
 
 ![DirWalker block diagram](docs/src/images/dirwalker.drawio.svg)
 
+## Agent types
+
+The three types of agents are:
+
+1. Control agent
+2. Directory agent
+3. File agent
+
+Agents perform actions.  The control agent is a single internal `Task` that runs
+in the main process.  Directory and file agents can be in-process `Task`s or
+external worker processes.  All agents run concurrently.  Usually multiple
+directory and file agents are used to process the directory walk in parallel.
+Agents run a loop until the agent's exit condition is met.
+
 ## Queues
 
-1. A directory queue (DQ)
-2. A file queue (FQ)
-3. An output queue (OQ)
+The four queues are:
 
-The directory and file queues are `Channel`s or `RemoteChannel`s that contain
-Strings.  The output queue can hold a user-supplied type or Nothing (to signal
-the end of data).
+1. Directory queue (DQ) TODO Rename to Top queue (TQ)?
+2. Work queue (WQ) TODO Rename to Directory queue?
+2. File queue (FQ)
+3. Output queue (OQ)
 
-Two other types of queues are used internally:
+The directory, work, and file queues are `Channel`s or `RemoteChannel`s that
+contain `String`s.  The output queue can hold a user-supplied type or `Nothing`
+(to signal the end of data).
 
-4. An agent queue (AQ)
-5. Work queues (WQ), one per directory agent
+## Theory of operation
 
-## Agents
+The `run_dirwalker` function orchestrates the life cycle of the directory
+walker.  It is responsible for starting the agents, detecting completion of the
+directory walk, stopping the agents, and fetching runtime statistics from the
+agents.  The user must pass one or more top level directory names for walking.
 
-1. Directory agent
-2. File agent
+### Control agent
 
-The agents can be in-process `Task`s or external worker processes.  These
-agents run functions defined within `DirWalkers`, but the user can pass
-functions to customize their actions.  The agents all run in parallel (i.e.
-concurrently).
+The control agent is managed internally by `run_dirwalker`.  It is the primary
+driver of the directory walking process.  The control agent takes directory
+names from the directory queue and puts them into the work queue.  A "posted"
+counter is incremented for each directory name put into the work queue.  Getting
+an empty string from the directory queue signifies the completion of an earlier
+posted directory.  For each empty string taken from the directory queue a
+"completed" counter is incremented.  The directory walk is done when the
+"completed" counter equals the "posted" counter.  The directory queue is
+initially populated with the top level directory names, but aditional
+(sub-)directories are added to the directory queue by the directory agents as
+they process the directories taken from the work queue.
 
 ### Directory agents
 
-Effectively, directory agents run a loop.  For each iteration, they take a
+Directory agents run a loop.  For each iteration, they take a
 directory name from the directory queue.  The entries of the directory are read.
 Each entry that is a directory is added to the directory queue.  Each entry that
-is a file is passed to a user-supplied *predicate function* (i.e. a function
-that returns `true` or `false`).  If the predicate returns `true`, the filename
-is added to the file queue, otherwise it is ignored.  To avoid loops and other
-potential problems, symbolic links are also ignored.  Directory agents run
-until they take an empty String from the directory queue.
+is a file is added to the file queue, otherwise it is ignored.  To avoid loops
+and other potential problems, symbolic links are also ignored.  Users can
+provide directory and file *predicate functions* (i.e. functions that returns
+`true` or `false`) to process only directories and files for which the
+corresponding predicate function returns `true`.  By default, all directories
+and files are processed.  Directory agents run until they take an empty String
+from the directory queue.
 
 ### File agents
 
-File agents also run a loop.  For each iteration they take a filename from the
+File agents run a loop.  For each iteration they take a filename from the
 file queue.  The file name is passed to a user-supplied *file function* that is
 expected to do something with the file and return an iterator that yields
 data from (or about) the file.  Even if a single object is derived from the
@@ -74,21 +98,22 @@ String from the file queue.
 
 A directory walk is performed by calling the `run_dirwalker` function:
 
-    run_dirwalker(filefunc, dirq, fileq, outq, topdirs, args...;
-        filepred=_->true, dagentspec=1, fagentspec=1, extraspec=nothing, kwargs...)
+    run_dirwalker(filefunc, dirq, workq, fileq, outq, topdirs, args...;
+        dirpred=_->true, filepred=_->true, dagentspec=1, fagentspec=1,
+        extraspec=nothing, kwargs...)
 
 ## Arguments
 
-- `filefunc` - The user-supplied function that will produce an output
-  value for each file.  Its first argument must take the filename.  Any
-  additional `args` and `kwargs` passed to `run_dirwalker` will be passed to
-  `filefunc` as well.
-- `dirq` - The user-supplied directory queue
-- `fileq` - The user-supplied file queue
-- `outq` - The user-supplied output queue
+- `filefunc` - The function that will produce an output value for each file.
+  Its first argument must take the filename.  Any additional `args` and `kwargs`
+  passed to `run_dirwalker` will be passed to `filefunc` as well.
+- `dirq` - The directory queue
+- `workq` - The work queue
+- `fileq` - The file queue
+- `outq` - The output queue
 - `topdirs` - A Vector of directory names to be walked
-- `filepred` - The file predicate function (defaults to `true`, i.e. match all
-  files)
+- `dirpred` - The directory predicate function (default matches all directories)
+- `filepred` - The file predicate function (default matches all files)
 - `dagentspec` - This is the directory agent specification, see below
 - `fagentspec` - This is the file agent specification, see below
 - `extraspec` - This is an optional extra file specification, see below
@@ -108,7 +133,7 @@ integers) and `dirq` must be a `RemoteDirQueue`.  For `fagentspec`, the same
 constraints apply for `fileq` and `outq`.
 
 `extraspec` is an optional specification for additional file agents that will be
-started after the directory agents start.  It must be in the same format as
+started after the directory agents finish.  It must be in the same format as
 `fagentspec`.  This is useful when one host will be running the directory agents
 in-process and other hosts will be running the file agents remotely.  To utilize
 the host resources that the directory agents had been using, additional
