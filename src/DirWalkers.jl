@@ -175,11 +175,11 @@ function start_dagents(topq, dirq, fileq, agentspec::Integer;
 end
 
 function start_fagents(filefunc, fileq, outq, agentspec, args...;
-    process_files=_process_files, kwargs...
+    idoffset=0, process_files=_process_files, kwargs...
 )
     map(1:agentspec) do id
         errormonitor(
-            Threads.@spawn process_files(filefunc, id, fileq, outq, args...; kwargs...)
+            Threads.@spawn process_files(filefunc, id+idoffset, fileq, outq, args...; kwargs...)
         )
     end
 end
@@ -228,8 +228,10 @@ function run_dirwalker(filefunc, topq, dirq, fileq, outq, topdirs, args...;
 
     # Startup extra file agents, if any
     if extraspec !== nothing
+        idoffset = length(fagents)
         append!(fagents, start_fagents(
-            filefunc, fileq, outq, extraspec, args...; process_files, kwargs...
+            filefunc, fileq, outq, extraspec, args...;
+            idoffset, process_files, kwargs...
         ))
     end
 

@@ -31,7 +31,7 @@ end
 # If fagents are remote workers then fileq and outq must both be remote queues.
 function start_fagents(filefunc, fileq::RemoteFileQueue, outq::RemoteOutQueue,
     agentspec::AbstractVector{<:Integer}, args...;
-    process_files=_process_files, kwargs...
+    idoffset=0, process_files=_process_files, kwargs...
 )
     # Use tasks to spawn remote agents in parallel
     spawntasks = map(agentspec) do w
