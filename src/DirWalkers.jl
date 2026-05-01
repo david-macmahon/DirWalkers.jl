@@ -3,15 +3,15 @@ module DirWalkers
 using Base.Iterators: takewhile
 
 export run_dirwalker
-export DirQueue, WorkQueue, FileQueue, OutQueue
-export RemoteDirQueue, RemoteWorkQueue, RemoteFileQueue, RemoteOutQueue
+export TopQueue, DirQueue, FileQueue, OutQueue
+export RemoteTopQueue, RemoteDirQueue, RemoteFileQueue, RemoteOutQueue
 
 # One million should be enough, but OK to block if a queue gets full
 DEFAULT_QUEUE_SIZE = 10^6
 
 # Queue channel types
+const TopQueue = Channel{String}
 const DirQueue = Channel{String}
-const WorkQueue = Channel{String}
 const FileQueue = Channel{String}
 const OutQueue{T} = Channel{Union{Nothing,T}}
 
@@ -26,35 +26,36 @@ Return the maximum number of items that `q` can hold.
 qsize(q::Channel) = q.sz_max
 
 """
-    _control_loop(dirq, workq)
+    _control_loop(topq, dirq)
 
-Runs a loop that takes `String`s from `dirq` and puts non-empty `String`s into
-`workq`.  For each `String` put into `workq`, increment a "posted" counter.  For
-each empty `String` taken from `dirq` increment a "completed" counter.  Exit the
-loop when "completed" counter equals the "posted" counter and return number of
-items put into workq (i.e. completed or posted counter).
+Runs a loop that takes `String`s from `topq` and puts non-empty `String`s into
+`dirq`.  For each `String` put into `dirq` a "posted" counter is incremented.
+For each empty `String` taken from `topq` a "completed" counter is incremented.
+The loop exits when the "completed" counter is no longer less than the "posted"
+counter.  The number of items completed items is returned.
 """
-function _control_loop(dirq, workq)
+function _control_loop(topq, dirq)
     @debug "control agent starting"
     nposted = 0
     ncompleted = 0
     keep_running = true
     while keep_running
-        for item in takewhile(!isempty, dirq)
+        # Keep forwarding items from topq to dirq until we get an empty item
+        for item in takewhile(!isempty, topq)
             @debug "got item" item
-            # Got a work item, put it in workq.  We can't do `isdir` check on
+            # Got a work item, put it in dirq.  We can't do `isdir` check on
             # `item` here because the control agent may be running on a system
             # (e.g. a head node) that doesn't have access to the relevant
             # filesystem (e.g. `/datag`).
-            @debug "putting item into workq"
-            put!(workq, item)
+            @debug "putting item into dirq"
+            put!(dirq, item)
             nposted += 1
-            @debug "put item into workq" nposted ncompleted
+            @debug "put item into dirq" nposted ncompleted
         end
 
-        # A work request completed, increment ncompleted
+        # An empty item means work request was completed, increment ncompleted
         ncompleted += 1
-        @debug "got empty string from dirq" nposted ncompleted
+        @debug "got empty string from topq" nposted ncompleted
 
         # Keep running if ncompleted is less than nposted
         keep_running = (ncompleted < nposted)
@@ -64,24 +65,24 @@ function _control_loop(dirq, workq)
 end
 
 """
-    _process_dirs(id, dirq, workq, fileq; dirpred=_->true, filepred=_->true)
+    _process_dirs(id, topq, dirq, fileq; dirpred=_->true, filepred=_->true)
 
-Takes directory names from `workq` until it gets an empty directory name, which
+Takes directory names from `dirq` until it gets an empty directory name, which
 causes the function to return `(; host=hostname, id, t=elapsed_time, n=ndirs)`.
-For each directory taken from `workq` its subdirectory entries are `put!` into
-`dirq` if `dirpred` returns true and its files entries are `put!` into `fileq`
+For each directory taken from `dirq` its subdirectory entries are `put!` into
+`topq` if `dirpred` returns true and its files entries are `put!` into `fileq`
 if `filepred` returns `true`.  `dirpred` and `filepred` are expected to be
 functions that accept the directory or file name and return a boolean.  Symbolic
 links are always ignored.
 """
-function _process_dirs(id, dirq, workq, fileq;
+function _process_dirs(id, topq, dirq, fileq;
     dirpred=_->true, filepred=_->true
 )
 try
     start = time()
     ndirs = 0
     @debug "dagent $id starting at $start"
-    for dir in takewhile(!isempty, workq)
+    for dir in takewhile(!isempty, dirq)
         ndirs += 1
         @debug "dagent $id processing dir $dir"
         try
@@ -94,10 +95,10 @@ try
                 @debug "dagent $id processing $item"
                 islink(item) && continue # skip symlinks
                 if isdir(item)
-                    # Add subdir item to dirq if dirpred returns true
+                    # Add subdir item to topq if dirpred returns true
                     if dirpred(item)
-                        @debug "dagent $id adding directory $item to dirq"
-                        put!(dirq, item)
+                        @debug "dagent $id adding directory $item to topq"
+                        put!(topq, item)
                     else
                         @debug "dagent $id ignoring dir $item"
                     end
@@ -110,16 +111,16 @@ try
                         @debug "dagent $id ignoring file $item"
                     end
                 else
-                    @debug "dagent $id ignoring non-dir non-file $item"
+                    @debug "dagent $id ignoring unhandled item $item"
                 end
             end
         catch ex
             # TODO Make this @warn or @error?
             @debug "dagent $id error processing directory $dir\n$ex"
         finally
-            # Indicate "agent done"
-            @debug "dagent $id putting empty string (agent done) in dirq"
-            put!(dirq, "")
+            # Indicate "work completion" in topq
+            @debug "dagent $id putting empty string (work completion) in topq"
+            put!(topq, "")
         end
         @debug "dagent $id end of dagent iteration"
     end
@@ -156,19 +157,19 @@ end
 end
 
 """
-    start_dagents(dirq, workq, fileq, agentspec::Integer;
+    start_dagents(topq, dirq, fileq, agentspec::Integer;
         dirpred=_->true, filepred=_->true, process_dirs=_process_dirs
     )
 
 TBW
 """
-function start_dagents(dirq, workq, fileq, agentspec::Integer;
+function start_dagents(topq, dirq, fileq, agentspec::Integer;
     dirpred=_->true, filepred=_->true, process_dirs=_process_dirs
 )
     # Start dagent tasks
     map(1:agentspec) do id
         errormonitor(
-            Threads.@spawn process_dirs(id, dirq, workq, fileq; dirpred, filepred)
+            Threads.@spawn process_dirs(id, topq, dirq, fileq; dirpred, filepred)
         )
     end
 end
@@ -183,33 +184,33 @@ function start_fagents(filefunc, fileq, outq, agentspec, args...;
     end
 end
 
-function run_dirwalker(filefunc, dirq, workq, fileq, outq, topdirs, args...;
+function run_dirwalker(filefunc, topq, dirq, fileq, outq, topdirs, args...;
     dirpred=_->true, filepred=_->true, dagentspec=1, fagentspec=1, extraspec=nothing,
     process_dirs=_process_dirs, process_files=_process_files, kwargs...
 )
     # topdirs cannot contain empty strings
     any(isempty, topdirs) && error("topdirs cannot contain empty names")
 
-    # dirq must be able to hold all of topdirs
-    qsize(dirq) < length(topdirs) && error("dirq is not large enough for topdirs")
+    # topq must be able to hold all of topdirs
+    qsize(topq) < length(topdirs) && error("topq is not large enough for topdirs")
 
     # Start dir agents
-    dagents = start_dagents(dirq, workq, fileq, dagentspec; dirpred, filepred, process_dirs)
+    dagents = start_dagents(topq, dirq, fileq, dagentspec; dirpred, filepred, process_dirs)
 
     # Start file agents
     fagents = start_fagents(filefunc, fileq, outq, fagentspec, args...; process_files, kwargs...)
 
-    # Populate dirq.  This can lead to a deadlock if dirq is not deep enough
+    # Populate topq.  This can lead to a deadlock if topq is not deep enough
     # to hold all topdirs so we have an explicit check for that above.
     for item in topdirs
         # We can't do `isdir` checks on `topdirs` entries here because the
         # current process may be running on a system (e.g. a head node) that
         # doesn't have access to the relevant filesystem (e.g. `/datag`).
-        put!(dirq, item)
+        put!(topq, item)
     end
 
     # Start control agent
-    cagent = errormonitor(Threads.@spawn _control_loop(dirq, workq))
+    cagent = errormonitor(Threads.@spawn _control_loop(topq, dirq))
 
     # Everything has been started!
 
@@ -219,7 +220,7 @@ function run_dirwalker(filefunc, dirq, workq, fileq, outq, topdirs, args...;
 
     @debug "signaling completion to dir agents"
     for _ in dagents
-        put!(workq, "")
+        put!(dirq, "")
     end
 
     @info "waiting for dir agents to complete"

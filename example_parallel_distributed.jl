@@ -13,14 +13,14 @@ fagentspec = ws[3:4]
 
 # Create queues
 @info "creating queues"
+topq = RemoteTopQueue(sz=Inf)
 dirq = RemoteDirQueue(sz=Inf)
-workq = RemoteWorkQueue(sz=Inf)
 fileq = RemoteFileQueue(sz=Inf)
 outq = RemoteOutQueue{Base.Filesystem.StatStruct}(sz=Inf)
 
 # Start the directory walker running in a separate Task
-@info "spawning run_dirwalker task"
-runtask = Threads.@spawn run_dirwalker(tuple∘stat, dirq, workq, fileq, outq, [@__DIR__];
+@info "spawning directory walker task"
+dwtask = Threads.@spawn run_dirwalker(tuple∘stat, topq, dirq, fileq, outq, [@__DIR__];
     dagentspec, fagentspec
 )
 
@@ -30,6 +30,6 @@ for ss in Iterators.takewhile(!isnothing, outq)
 end
 
 # Get run_dirwalker return values by fetching from runtask
-ndirs, dstats, fstats = fetch(runtask)
+ndirs, dstats, fstats = fetch(dwtask)
 
 @show ndirs dstats fstats
