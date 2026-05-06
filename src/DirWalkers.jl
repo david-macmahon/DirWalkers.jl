@@ -174,7 +174,7 @@ function start_dagents(topq, dirq, fileq, agentspec::Integer;
     end
 end
 
-function start_fagents(filefunc, fileq, outq, agentspec, args...;
+function start_fagents(filefunc, fileq, outq, agentspec::Integer, args...;
     idoffset=0, process_files=_process_files, kwargs...
 )
     map(1:agentspec) do id

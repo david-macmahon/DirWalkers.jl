@@ -18,7 +18,7 @@ qsize(q::RemoteChannel) = call_on_owner(qsize∘channel_from_id, q)
 # If dagents are remote workers then topq, dirq, and fileq must all be remote
 # queues.
 function start_dagents(topq::RemoteTopQueue, dirq::RemoteDirQueue,
-    fileq::RemoteFileQueue, agentspec::AbstractVector{<:Integer};
+    fileq::RemoteFileQueue, agentspec::AbstractVector;
     dirpred=_->true, filepred=_->true, process_dirs=_process_dirs
 )
     # Spawn remote directory agents
@@ -30,7 +30,7 @@ end
 
 # If fagents are remote workers then fileq and outq must both be remote queues.
 function start_fagents(filefunc, fileq::RemoteFileQueue, outq::RemoteOutQueue,
-    agentspec::AbstractVector{<:Integer}, args...;
+    agentspec::AbstractVector, args...;
     idoffset=0, process_files=_process_files, kwargs...
 )
     # Use tasks to spawn remote agents in parallel
