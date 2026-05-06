@@ -202,6 +202,10 @@ function run_dirwalker(filefunc, topq, dirq, fileq, outq, topdirs, args...;
 
     # Populate topq.  This can lead to a deadlock if topq is not deep enough
     # to hold all topdirs so we have an explicit check for that above.
+    # If we populate topq after starting the control and directory agents, then
+    # there is a possibile race condition of the first topdir getting processed
+    # and its "work completion" empty string getting "counted" before the second
+    # topdir ever makes it into topq thereby terminating the whole walk early!
     for item in topdirs
         # We can't do `isdir` checks on `topdirs` entries here because the
         # current process may be running on a system (e.g. a head node) that
