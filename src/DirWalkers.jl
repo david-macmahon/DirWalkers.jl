@@ -1,6 +1,8 @@
 module DirWalkers
 
 using Base.Iterators: takewhile
+using Distributed: RemoteChannel, @spawnat, call_on_owner, channel_from_id,
+    myid, remotecall_fetch
 
 export run_dirwalker
 export TopQueue, DirQueue, FileQueue, OutQueue
@@ -15,15 +17,7 @@ const DirQueue = Channel{String}
 const FileQueue = Channel{String}
 const OutQueue{T} = Channel{Union{Nothing,T}}
 
-"""
-Return the number of items available in `q`.
-"""
-nitems(q::Channel) = Base.n_avail(q)
-
-"""
-Return the maximum number of items that `q` can hold.
-"""
-qsize(q::Channel) = q.sz_max
+include("utils.jl")
 
 """
     _control_loop(topq, dirq)

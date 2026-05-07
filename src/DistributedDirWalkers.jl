@@ -1,5 +1,3 @@
-using Distributed: RemoteChannel, @spawnat, call_on_owner, channel_from_id, myid
-
 # Concrete queue channel types
 const RemoteTopQueue = RemoteChannel{Channel{String}}
 const RemoteDirQueue = RemoteChannel{Channel{String}}
@@ -11,9 +9,6 @@ const RemoteOutQueue{T} = RemoteChannel{Channel{Union{Nothing,T}}}
 RemoteDirQueue(pid=myid(); sz=0) = RemoteChannel(()->Channel{String}(sz), pid)
 #RemoteFileQueue(pid=myid(); sz=0) = RemoteChannel(()->Channel{String}(sz), pid)
 RemoteOutQueue{T}(pid=myid(); sz=0) where T = RemoteChannel(()->Channel{Union{Nothing,T}}(sz), pid)
-
-nitems(q::RemoteChannel) = call_on_owner(nitems∘channel_from_id, q)
-qsize(q::RemoteChannel) = call_on_owner(qsize∘channel_from_id, q)
 
 # If dagents are remote workers then topq, dirq, and fileq must all be remote
 # queues.
